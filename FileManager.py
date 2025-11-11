@@ -10,6 +10,7 @@ import platform
 import subprocess
 import shutil  # All imports at the top
 import logging # All imports at the top
+import sys 
 
 try:
     from send2trash import send2trash
@@ -17,7 +18,7 @@ try:
 except ImportError:
     HAS_SEND2TRASH = False
 
-VERSION = "1.5.4" # Incremented for the last fix
+VERSION = "1.5.7" # Incremented for final polish
 STATUS_CLEAR_DELAY_MS = 5000 # 5 seconds
 STATUS_ERROR_DELAY_MS = 10000 # 10 seconds
 QUEUE_BATCH_PROCESS_LIMIT = 50 # Process this many queue items per cycle
@@ -32,6 +33,16 @@ class FileManagementApp:
         self.root.title(f"File Management Toolkit v{VERSION}")
         self.root.geometry("1000x700")
         self.root.minsize(600, 400)
+
+        # --- SET THE WINDOW ICON ---
+        try:
+            # This helper function finds the icon file (works in dev and in PyInstaller)
+            icon_path = self.resource_path("icon.ico") # <-- Assumes your icon is named "icon.ico"
+            self.root.iconbitmap(icon_path)
+        except Exception as e:
+            # We need the logger to be set up first, so we'll log this later
+            self.initial_icon_error = e
+        # --- END ICON ---
 
         # Style
         self.style = ttk.Style()
@@ -55,6 +66,17 @@ class FileManagementApp:
         
         # Start the queue polling loop
         self.root.after(QUEUE_POLL_INTERVAL_MS, self.check_queue)
+
+    def resource_path(self, relative_path):
+        """ Get absolute path to resource, works for dev and for PyInstaller """
+        try:
+            # PyInstaller creates a temp folder and stores path in _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            # Not running in PyInstaller, so use the normal script path
+            base_path = os.path.abspath(".")
+
+        return os.path.join(base_path, relative_path)
 
     def setup_ui(self):
         # Top frame for source directory
@@ -619,7 +641,8 @@ class FileManagementApp:
         if self.current_task:
             self.current_task.set() # Set the event flag
             self.update_status("Cancelling task...")
-        
+    
+    # --- THIS IS THE ONLY, CORRECT check_queue FUNCTION ---
     def check_queue(self):
         """Poll the queue for messages from worker threads."""
         processed_count = 0
@@ -720,9 +743,20 @@ class FileManagementApp:
                     is_done_or_error = True
                     final_message = message
                 
-                # --- FIXED: Re-enable buttons based on remaining items ---
+                # --- Re-enable buttons based on remaining items ---
+                elif msg_type == "dupe_action_done": # <-- This was missing
+                    message, _ = data
+                    # Get a fresh, reliable count
+                    remaining_count = len(self.dupe_tree.get_children())
+                    if remaining_count > 0:
+                        self.auto_delete_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                    
                 elif msg_type == "finder_action_done":
-                    message, remaining_count = data
+                    message, _ = data
+                    # Get a fresh, reliable count
+                    remaining_count = len(self.finder_tree.get_children())
                     if remaining_count > 0:
                         self.finder_delete_button.config(state=tk.NORMAL)
                         self.finder_move_button.config(state=tk.NORMAL)
@@ -731,12 +765,13 @@ class FileManagementApp:
                     final_message = message
                 
                 elif msg_type == "analyzer_action_done":
-                    message, remaining_count = data
+                    message, _ = data
+                     # Get a fresh, reliable count
+                    remaining_count = len(self.analyzer_tree.get_children())
                     if remaining_count > 0:
                         self.analyzer_delete_button.config(state=tk.NORMAL)
                     is_done_or_error = True
                     final_message = message
-                # --- END FIX ---
 
                 # --- Final "Done" or "Error" messages ---
                 elif msg_type == "done":
@@ -782,6 +817,8 @@ class FileManagementApp:
         self.update_status("Starting scan...")
         use_hash = self.use_hash_var.get()
         export_csv = self.export_csv_var.get()
+        
+        # --- FIXED BUG: Set start_time only if task successfully starts ---
         if self.start_task(self.scan_logic, use_hash, export_csv):
             self.start_time = datetime.now() # Set start time
             self.update_status("Scanning for duplicates...")
@@ -1001,7 +1038,9 @@ class FileManagementApp:
             msg = f"Auto-delete complete. Deleted {deleted_count} files."
             if failed_count > 0:
                 msg += f" Failed to delete {failed_count} files (see console for errors)."
-            self.queue.put(("done", msg))
+            
+            # Use the correct message to re-enable button
+            self.queue.put(("dupe_action_done", (msg, 0)))
 
         except Exception as e:
             self.logger.exception("Error in auto_delete_logic")
@@ -1584,7 +1623,6 @@ class FileManagementApp:
             if failed_count > 0:
                 msg += f" Failed to process {failed_count} files (see console)."
             
-            # --- FIXED: Use a different queue message to re-enable buttons ---
             # This allows the UI thread to reliably count remaining items
             self.queue.put(("finder_action_done", (msg, 0))) # 0 is a placeholder
 
@@ -1678,6 +1716,7 @@ class FileManagementApp:
                         
                         if include_files:
                             if check_filters(size, 1, is_file=True):
+                                # Send "File" as the item count
                                 results_batch.append((f, root, self.format_size(size), "File"))
                                 total_items_found += 1
                                 
@@ -1777,7 +1816,7 @@ class FileManagementApp:
             if failed_count > 0:
                 msg += f" Failed to delete {failed_count} items (see console)."
             
-            # --- FIXED: Use a different queue message to re-enable buttons ---
+            # This allows the UI thread to reliably count remaining items
             self.queue.put(("analyzer_action_done", (msg, 0))) # 0 is a placeholder
 
         except Exception as e:
@@ -1820,6 +1859,7 @@ class FileManagementApp:
                 continue # Item already gone
         
         # Run this as a "mini-task"
+        # --- FIXED BUG: Check return value of start_task ---
         if self.start_task(self.generic_delete_logic, paths_to_delete, selected_iids):
             self.update_status(f"Deleting {len(paths_to_delete)} files...")
             self.auto_delete_button.config(state=tk.DISABLED) # Disable main button
@@ -1850,176 +1890,12 @@ class FileManagementApp:
                 msg += f" Failed to delete {failed_count} files (see console)."
             
             # Re-enable auto-delete button if items remain
-            # We use dupe_scan_done, which will get the count from the tree
+            # This is the correct, fixed message type
             self.queue.put(("dupe_action_done", (msg, 0))) # 0 is placeholder
 
         except Exception as e:
             self.logger.exception("Error in generic_delete_logic")
             self.queue.put(("error", f"An error occurred during delete: {e}"))
-            
-    # --- FIXED: Re-added dupe_action_done to check_queue ---
-    def check_queue(self):
-        """Poll the queue for messages from worker threads."""
-        processed_count = 0
-        is_done_or_error = False
-        final_message = ""
-        
-        try:
-            while processed_count < QUEUE_BATCH_PROCESS_LIMIT:
-                msg = self.queue.get_nowait()
-                processed_count += 1
-                
-                msg_type, data = msg
-                
-                if msg_type == "status":
-                    self.update_status(data)
-                
-                # --- Batch Treeview Updates ---
-                elif msg_type == "dupe_results_batch":
-                    for item in data:
-                        self.dupe_tree.insert("", tk.END, values=item)
-                elif msg_type == "sorter_results_batch":
-                    for item in data:
-                        self.sorter_tree.insert("", tk.END, values=item)
-                elif msg_type == "collector_results_batch":
-                    for item in data:
-                        self.collector_tree.insert("", tk.END, values=item)
-                elif msg_type == "finder_results_batch":
-                    for item in data:
-                        self.finder_tree.insert("", tk.END, values=item)
-                elif msg_type == "analyzer_results_batch":
-                    for item in data:
-                        self.analyzer_tree.insert("", tk.END, values=item)
-
-                # --- Clear Treeviews ---
-                elif msg_type == "clear_dupe_tree":
-                    self.dupe_tree.delete(*self.dupe_tree.get_children())
-                elif msg_type == "clear_sorter_tree":
-                    self.sorter_tree.delete(*self.sorter_tree.get_children())
-                elif msg_type == "clear_collector_tree":
-                    self.collector_tree.delete(*self.collector_tree.get_children())
-                elif msg_type == "clear_finder_tree":
-                    self.finder_tree.delete(*self.finder_tree.get_children())
-                elif msg_type == "clear_analyzer_tree":
-                    self.analyzer_tree.delete(*self.analyzer_tree.get_children())
-
-                # --- Remove Specific Items (post-action) ---
-                elif msg_type == "remove_dupe_iids":
-                    self.dupe_tree.delete(*data)
-                elif msg_type == "remove_finder_items":
-                    for iid in data:
-                        try:
-                            # This message is now shared by Finder and Analyzer
-                            self.finder_tree.delete(iid)
-                        except tk.TclError:
-                            try:
-                                self.analyzer_tree.delete(iid)
-                            except tk.TclError:
-                                pass # Item already gone from both
-
-                # --- "Preview Done" messages (enables action buttons) ---
-                elif msg_type == "dupe_scan_done":
-                    message, file_count = data # Unpack (message, count)
-                    if file_count > 0:
-                        self.auto_delete_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-
-                elif msg_type == "sorter_preview_done":
-                    message, file_count = data # Unpack (message, count)
-                    if file_count > 0:
-                        self.sorter_process_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-                
-                elif msg_type == "collector_preview_done":
-                    message, file_count = data # Unpack (message, count)
-                    if file_count > 0:
-                        self.collector_process_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-                
-                elif msg_type == "finder_preview_done":
-                    message, file_count = data # Unpack (message, count)
-                    if file_count > 0:
-                        # Enable action buttons
-                        self.finder_delete_button.config(state=tk.NORMAL)
-                        self.finder_move_button.config(state=tk.NORMAL)
-                        self.finder_copy_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-
-                elif msg_type == "analyzer_scan_done":
-                    message, item_count = data # Unpack (message, count)
-                    if item_count > 0:
-                        self.analyzer_delete_button.config(state=tk.NORMAL)
-                        # Sort by size by default
-                        self.sort_treeview(self.analyzer_tree, "Size", True)
-                    is_done_or_error = True
-                    final_message = message
-                
-                # --- FIXED: Re-enable buttons based on remaining items ---
-                elif msg_type == "dupe_action_done": # <-- This was missing
-                    message, _ = data
-                    # Get a fresh, reliable count
-                    remaining_count = len(self.dupe_tree.get_children())
-                    if remaining_count > 0:
-                        self.auto_delete_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-                    
-                elif msg_type == "finder_action_done":
-                    message, _ = data
-                    # Get a fresh, reliable count
-                    remaining_count = len(self.finder_tree.get_children())
-                    if remaining_count > 0:
-                        self.finder_delete_button.config(state=tk.NORMAL)
-                        self.finder_move_button.config(state=tk.NORMAL)
-                        self.finder_copy_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-                
-                elif msg_type == "analyzer_action_done":
-                    message, _ = data
-                     # Get a fresh, reliable count
-                    remaining_count = len(self.analyzer_tree.get_children())
-                    if remaining_count > 0:
-                        self.analyzer_delete_button.config(state=tk.NORMAL)
-                    is_done_or_error = True
-                    final_message = message
-                # --- END FIX ---
-
-                # --- Final "Done" or "Error" messages ---
-                elif msg_type == "done":
-                    is_done_or_error = True
-                    final_message = data
-                
-                elif msg_type == "error":
-                    is_done_or_error = True
-                    final_message = data
-                
-                elif msg_type == "cancelled":
-                    is_done_or_error = True
-                    final_message = "Task cancelled by user."
-
-        except queue.Empty:
-            pass # No more messages in queue
-            
-        except Exception as e:
-            # This is a safety catch for the queue processor itself
-            is_done_or_error = True
-            final_message = f"Critical UI Error: {e}"
-            self.logger.exception("Critical error in check_queue")
-
-        # If a task finished, update state
-        if self.current_task and is_done_or_error:
-            self.toggle_controls(scanning=False) # Re-enable scan buttons
-            self.current_task = None
-            self.update_status(final_message) # Show final message
-            
-        # Reschedule the queue check
-        self.root.after(QUEUE_POLL_INTERVAL_MS, self.check_queue)
-    # --- End of re-inserted check_queue ---
 
     def finder_show_context_menu(self, event):
         """Show context menu for file finder tree."""
@@ -2057,8 +1933,11 @@ class FileManagementApp:
             # Open the folder for the *first* selected item
             selected_iid = self.analyzer_tree.selection()[0]
             values = self.analyzer_tree.item(selected_iid, 'values')
-            name, path, _, item_type = values
-            if item_type == "File":
+            name, path, _, item_type_str = values
+            
+            # --- FIXED BUG ---
+            # Check if the "Items" column says "File"
+            if item_type_str == "File":
                 self._open_path(path) # Open the containing folder
             else:
                 self._open_path(os.path.join(path, name)) # Open the folder itself
@@ -2130,12 +2009,20 @@ class FileManagementApp:
         elif col in ("Set #", "Items"):
             # Try numeric sort for 'Set #' and 'Items'
             def extract_num(val_tuple):
+                val_str = str(val_tuple[0])
+                if val_str.lower() == 'file': 
+                    return -1 # Treat "File" as -1 in 'Items' col
+                
                 try:
-                    s = str(val_tuple[0]).split(" ")[0].replace(',', '')
-                    if s.lower() == 'file': return -1 # Treat "File" as -1 in 'Items' col
-                    return float(s)
+                    # First, try to convert the whole string (e.g., "500")
+                    return float(val_str.replace(',', ''))
                 except (ValueError, TypeError, AttributeError):
-                    return 0 # Fallback for non-numeric
+                    try:
+                        # Fallback: get the *second* part (e.g., "Set 1" -> "1")
+                        s_num = val_str.split(" ")[1].replace(',', '')
+                        return float(s_num)
+                    except (ValueError, TypeError, AttributeError, IndexError):
+                         return 0 # Fallback for non-numeric
             
             data_list.sort(key=extract_num, reverse=reverse)
         
@@ -2246,6 +2133,10 @@ if __name__ == "__main__":
     
     # Add logger to app instance
     app.logger = app_logger 
+    
+    # Now that logger is available, log the icon error if it happened
+    if hasattr(app, 'initial_icon_error'):
+        app.logger.warning(f"Could not load application icon: {app.initial_icon_error}")
     
     # Store start time on the app object for elapsed time calculation
     app.start_time = datetime.now() 
