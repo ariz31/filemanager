@@ -8,8 +8,8 @@ import csv
 from datetime import datetime
 import platform
 import subprocess
-import shutil  # Moved to top
-import logging # Moved to top
+import shutil  # All imports at the top
+import logging # All imports at the top
 
 try:
     from send2trash import send2trash
@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAS_SEND2TRASH = False
 
-VERSION = "1.5.3" # Consolidated version
+VERSION = "1.5.4" # Incremented for the last fix
 STATUS_CLEAR_DELAY_MS = 5000 # 5 seconds
 STATUS_ERROR_DELAY_MS = 10000 # 10 seconds
 QUEUE_BATCH_PROCESS_LIMIT = 50 # Process this many queue items per cycle
@@ -719,6 +719,24 @@ class FileManagementApp:
                         self.sort_treeview(self.analyzer_tree, "Size", True)
                     is_done_or_error = True
                     final_message = message
+                
+                # --- FIXED: Re-enable buttons based on remaining items ---
+                elif msg_type == "finder_action_done":
+                    message, remaining_count = data
+                    if remaining_count > 0:
+                        self.finder_delete_button.config(state=tk.NORMAL)
+                        self.finder_move_button.config(state=tk.NORMAL)
+                        self.finder_copy_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                
+                elif msg_type == "analyzer_action_done":
+                    message, remaining_count = data
+                    if remaining_count > 0:
+                        self.analyzer_delete_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                # --- END FIX ---
 
                 # --- Final "Done" or "Error" messages ---
                 elif msg_type == "done":
@@ -1566,16 +1584,9 @@ class FileManagementApp:
             if failed_count > 0:
                 msg += f" Failed to process {failed_count} files (see console)."
             
-            # Re-enable buttons by re-sending the "done" message
-            # Find remaining items
-            current_iids = set(self.finder_tree.get_children())
-            if action != "copy":
-                iids_to_remove_set = set(iids_to_remove)
-                remaining_count = len(current_iids - iids_to_remove_set)
-            else:
-                remaining_count = len(current_iids)
-                
-            self.queue.put(("finder_preview_done", (msg, remaining_count))) 
+            # --- FIXED: Use a different queue message to re-enable buttons ---
+            # This allows the UI thread to reliably count remaining items
+            self.queue.put(("finder_action_done", (msg, 0))) # 0 is a placeholder
 
         except Exception as e:
             self.logger.exception(f"Error in finder_action_logic ({action})")
@@ -1766,13 +1777,8 @@ class FileManagementApp:
             if failed_count > 0:
                 msg += f" Failed to delete {failed_count} items (see console)."
             
-            # We use analyzer_scan_done to re-enable the button if items remain
-            # Find remaining items
-            current_iids = set(self.analyzer_tree.get_children())
-            iids_to_remove_set = set(iids_to_remove)
-            remaining_count = len(current_iids - iids_to_remove_set)
-            
-            self.queue.put(("analyzer_scan_done", (msg, remaining_count)))
+            # --- FIXED: Use a different queue message to re-enable buttons ---
+            self.queue.put(("analyzer_action_done", (msg, 0))) # 0 is a placeholder
 
         except Exception as e:
             self.logger.exception("Error in analyzer_delete_logic")
@@ -1844,15 +1850,176 @@ class FileManagementApp:
                 msg += f" Failed to delete {failed_count} files (see console)."
             
             # Re-enable auto-delete button if items remain
-            current_iids = set(self.dupe_tree.get_children())
-            iids_to_remove_set = set(iids_to_remove)
-            remaining_count = len(current_iids - iids_to_remove_set)
-            
-            self.queue.put(("dupe_scan_done", (msg, remaining_count )))
+            # We use dupe_scan_done, which will get the count from the tree
+            self.queue.put(("dupe_action_done", (msg, 0))) # 0 is placeholder
 
         except Exception as e:
             self.logger.exception("Error in generic_delete_logic")
             self.queue.put(("error", f"An error occurred during delete: {e}"))
+            
+    # --- FIXED: Re-added dupe_action_done to check_queue ---
+    def check_queue(self):
+        """Poll the queue for messages from worker threads."""
+        processed_count = 0
+        is_done_or_error = False
+        final_message = ""
+        
+        try:
+            while processed_count < QUEUE_BATCH_PROCESS_LIMIT:
+                msg = self.queue.get_nowait()
+                processed_count += 1
+                
+                msg_type, data = msg
+                
+                if msg_type == "status":
+                    self.update_status(data)
+                
+                # --- Batch Treeview Updates ---
+                elif msg_type == "dupe_results_batch":
+                    for item in data:
+                        self.dupe_tree.insert("", tk.END, values=item)
+                elif msg_type == "sorter_results_batch":
+                    for item in data:
+                        self.sorter_tree.insert("", tk.END, values=item)
+                elif msg_type == "collector_results_batch":
+                    for item in data:
+                        self.collector_tree.insert("", tk.END, values=item)
+                elif msg_type == "finder_results_batch":
+                    for item in data:
+                        self.finder_tree.insert("", tk.END, values=item)
+                elif msg_type == "analyzer_results_batch":
+                    for item in data:
+                        self.analyzer_tree.insert("", tk.END, values=item)
+
+                # --- Clear Treeviews ---
+                elif msg_type == "clear_dupe_tree":
+                    self.dupe_tree.delete(*self.dupe_tree.get_children())
+                elif msg_type == "clear_sorter_tree":
+                    self.sorter_tree.delete(*self.sorter_tree.get_children())
+                elif msg_type == "clear_collector_tree":
+                    self.collector_tree.delete(*self.collector_tree.get_children())
+                elif msg_type == "clear_finder_tree":
+                    self.finder_tree.delete(*self.finder_tree.get_children())
+                elif msg_type == "clear_analyzer_tree":
+                    self.analyzer_tree.delete(*self.analyzer_tree.get_children())
+
+                # --- Remove Specific Items (post-action) ---
+                elif msg_type == "remove_dupe_iids":
+                    self.dupe_tree.delete(*data)
+                elif msg_type == "remove_finder_items":
+                    for iid in data:
+                        try:
+                            # This message is now shared by Finder and Analyzer
+                            self.finder_tree.delete(iid)
+                        except tk.TclError:
+                            try:
+                                self.analyzer_tree.delete(iid)
+                            except tk.TclError:
+                                pass # Item already gone from both
+
+                # --- "Preview Done" messages (enables action buttons) ---
+                elif msg_type == "dupe_scan_done":
+                    message, file_count = data # Unpack (message, count)
+                    if file_count > 0:
+                        self.auto_delete_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+
+                elif msg_type == "sorter_preview_done":
+                    message, file_count = data # Unpack (message, count)
+                    if file_count > 0:
+                        self.sorter_process_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                
+                elif msg_type == "collector_preview_done":
+                    message, file_count = data # Unpack (message, count)
+                    if file_count > 0:
+                        self.collector_process_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                
+                elif msg_type == "finder_preview_done":
+                    message, file_count = data # Unpack (message, count)
+                    if file_count > 0:
+                        # Enable action buttons
+                        self.finder_delete_button.config(state=tk.NORMAL)
+                        self.finder_move_button.config(state=tk.NORMAL)
+                        self.finder_copy_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+
+                elif msg_type == "analyzer_scan_done":
+                    message, item_count = data # Unpack (message, count)
+                    if item_count > 0:
+                        self.analyzer_delete_button.config(state=tk.NORMAL)
+                        # Sort by size by default
+                        self.sort_treeview(self.analyzer_tree, "Size", True)
+                    is_done_or_error = True
+                    final_message = message
+                
+                # --- FIXED: Re-enable buttons based on remaining items ---
+                elif msg_type == "dupe_action_done": # <-- This was missing
+                    message, _ = data
+                    # Get a fresh, reliable count
+                    remaining_count = len(self.dupe_tree.get_children())
+                    if remaining_count > 0:
+                        self.auto_delete_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                    
+                elif msg_type == "finder_action_done":
+                    message, _ = data
+                    # Get a fresh, reliable count
+                    remaining_count = len(self.finder_tree.get_children())
+                    if remaining_count > 0:
+                        self.finder_delete_button.config(state=tk.NORMAL)
+                        self.finder_move_button.config(state=tk.NORMAL)
+                        self.finder_copy_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                
+                elif msg_type == "analyzer_action_done":
+                    message, _ = data
+                     # Get a fresh, reliable count
+                    remaining_count = len(self.analyzer_tree.get_children())
+                    if remaining_count > 0:
+                        self.analyzer_delete_button.config(state=tk.NORMAL)
+                    is_done_or_error = True
+                    final_message = message
+                # --- END FIX ---
+
+                # --- Final "Done" or "Error" messages ---
+                elif msg_type == "done":
+                    is_done_or_error = True
+                    final_message = data
+                
+                elif msg_type == "error":
+                    is_done_or_error = True
+                    final_message = data
+                
+                elif msg_type == "cancelled":
+                    is_done_or_error = True
+                    final_message = "Task cancelled by user."
+
+        except queue.Empty:
+            pass # No more messages in queue
+            
+        except Exception as e:
+            # This is a safety catch for the queue processor itself
+            is_done_or_error = True
+            final_message = f"Critical UI Error: {e}"
+            self.logger.exception("Critical error in check_queue")
+
+        # If a task finished, update state
+        if self.current_task and is_done_or_error:
+            self.toggle_controls(scanning=False) # Re-enable scan buttons
+            self.current_task = None
+            self.update_status(final_message) # Show final message
+            
+        # Reschedule the queue check
+        self.root.after(QUEUE_POLL_INTERVAL_MS, self.check_queue)
+    # --- End of re-inserted check_queue ---
 
     def finder_show_context_menu(self, event):
         """Show context menu for file finder tree."""
