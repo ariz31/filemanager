@@ -8,8 +8,8 @@ import csv
 from datetime import datetime
 import platform
 import subprocess
-import shutil  # <-- MOVED TO TOP
-import logging # <-- MOVED TO TOP
+import shutil  # Moved to top
+import logging # Moved to top
 
 try:
     from send2trash import send2trash
@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAS_SEND2TRASH = False
 
-VERSION = "1.5.2" # Incremented version for import fix
+VERSION = "1.5.3" # Consolidated version
 STATUS_CLEAR_DELAY_MS = 5000 # 5 seconds
 STATUS_ERROR_DELAY_MS = 10000 # 10 seconds
 QUEUE_BATCH_PROCESS_LIMIT = 50 # Process this many queue items per cycle
@@ -306,7 +306,7 @@ class FileManagementApp:
         self.finder_size_check.pack(side=tk.LEFT)
 
         ttk.Label(size_frame, text="File size is").pack(side=tk.LEFT, padx=5)
-        self.finder_size_op_var = tk.StringVar(value="greater_than")
+        self.finder_size_op_var = tk.StringVar(value="greater than")
         self.finder_size_op_combo = ttk.Combobox(size_frame, textvariable=self.finder_size_op_var, values=["greater than", "less than"], width=12, state="disabled")
         self.finder_size_op_combo.pack(side=tk.LEFT, padx=5)
         
@@ -401,7 +401,7 @@ class FileManagementApp:
         self.finder_copy_button.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
 
     def create_analyzer_tab(self):
-        # --- NEW: Filters Frame ---
+        # --- Filters Frame ---
         filters_frame = ttk.Frame(self.analyzer_tab)
         filters_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -487,7 +487,7 @@ class FileManagementApp:
         xsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.analyzer_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # --- NEW: Right-click menu ---
+        # --- Right-click menu ---
         self.analyzer_tree.bind("<Button-3>", self.analyzer_show_context_menu)
         self.analyzer_context_menu = tk.Menu(self.root, tearoff=0)
         self.analyzer_context_menu.add_command(label="Open Folder/File Location", command=self.analyzer_open_folder)
@@ -496,6 +496,7 @@ class FileManagementApp:
     # --- UI Helper Methods ---
 
     def toggle_finder_filters(self):
+        """Enable/disable finder filter entry fields based on their checkboxes."""
         self.finder_size_op_combo.config(state=tk.NORMAL if self.finder_size_check_var.get() else tk.DISABLED)
         self.finder_size_entry.config(state=tk.NORMAL if self.finder_size_check_var.get() else tk.DISABLED)
         self.finder_size_unit_combo.config(state=tk.NORMAL if self.finder_size_check_var.get() else tk.DISABLED)
@@ -516,12 +517,14 @@ class FileManagementApp:
 
 
     def browse_source_dir(self):
+        """Open a dialog to select the source directory."""
         dir_path = filedialog.askdirectory()
         if dir_path:
             self.source_dir_var.set(dir_path)
             self.update_status("Ready. Start a scan or preview.")
 
     def update_status(self, message, clear_after=0):
+        """Update the status bar, with an optional auto-clear timer."""
         if self._status_clear_job:
             self.root.after_cancel(self._status_clear_job)
             self._status_clear_job = None
@@ -535,16 +538,17 @@ class FileManagementApp:
             self.status_label.config(foreground="") # Reset to default color
             delay = clear_after if clear_after > 0 else STATUS_CLEAR_DELAY_MS
             
-        if "complete" in message.lower() or "error" in message.lower():
-             # self.logger.info(f"Setting status clear job for {delay}ms")
+        if "complete" in message.lower() or "error" in message.lower() or "cancelled" in message.lower():
              self._status_clear_job = self.root.after(delay, self.clear_status)
     
     def clear_status(self):
+        """Reset the status bar to 'Ready'."""
         self.status_var.set("Ready.")
         self.status_label.config(foreground="")
         self._status_clear_job = None
     
     def toggle_controls(self, scanning=False):
+        """Disable or enable controls based on scanning state."""
         state = tk.DISABLED if scanning else tk.NORMAL
         
         # Top-level controls
@@ -591,6 +595,7 @@ class FileManagementApp:
             self.progress_bar.stop()
 
     def start_task(self, logic_function, *args):
+        """Generic task starter for threaded operations."""
         if self.current_task:
             messagebox.showwarning("Task in Progress", "Another task is already running. Please wait or cancel it.")
             return False
@@ -610,11 +615,13 @@ class FileManagementApp:
         return True
 
     def cancel_task(self):
+        """Signal the current running task to cancel."""
         if self.current_task:
             self.current_task.set() # Set the event flag
             self.update_status("Cancelling task...")
         
     def check_queue(self):
+        """Poll the queue for messages from worker threads."""
         processed_count = 0
         is_done_or_error = False
         final_message = ""
@@ -642,7 +649,6 @@ class FileManagementApp:
                 elif msg_type == "finder_results_batch":
                     for item in data:
                         self.finder_tree.insert("", tk.END, values=item)
-                
                 elif msg_type == "analyzer_results_batch":
                     for item in data:
                         self.analyzer_tree.insert("", tk.END, values=item)
@@ -656,7 +662,6 @@ class FileManagementApp:
                     self.collector_tree.delete(*self.collector_tree.get_children())
                 elif msg_type == "clear_finder_tree":
                     self.finder_tree.delete(*self.finder_tree.get_children())
-                
                 elif msg_type == "clear_analyzer_tree":
                     self.analyzer_tree.delete(*self.analyzer_tree.get_children())
 
@@ -752,6 +757,7 @@ class FileManagementApp:
     # --- ============================= ---
     
     def start_scan(self):
+        """Start the duplicate file scan."""
         # Disable button *before* starting task
         self.auto_delete_button.config(state=tk.DISABLED) 
         self.queue.put(("clear_dupe_tree", None))
@@ -763,6 +769,7 @@ class FileManagementApp:
             self.update_status("Scanning for duplicates...")
         
     def scan_logic(self, cancel_event, source_dir, use_hash, export_csv):
+        """Worker thread logic for finding duplicate files."""
         try:
             files_by_size = {}
             files_by_mod_time = {}
@@ -897,6 +904,7 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during scan: {e}"))
 
     def start_auto_delete(self):
+        """Start the auto-delete process based on the selected strategy."""
         strategy = self.delete_strategy_var.get()
         
         # Get all item IDs from the tree
@@ -924,6 +932,7 @@ class FileManagementApp:
             self.auto_delete_button.config(state=tk.DISABLED)
 
     def auto_delete_logic(self, cancel_event, source_dir, files_by_set, strategy):
+        """Worker thread logic for auto-deleting files."""
         try:
             files_to_delete = []
             iids_to_remove = []
@@ -981,7 +990,8 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during auto-delete: {e}"))
 
     def start_delete_empty_folders(self):
-        if not messagebox.askyesno("Confirm Delete", "Are you sure you want to find and delete all empty subfolders? This action cannot be undone."):
+        """Start the task to find and delete empty subfolders."""
+        if not messagebox.askyesno("Confirm Delete", f"Are you sure you want to find and delete all empty subfolders in '{self.source_dir_var.get()}'? This will use the Recycle Bin if possible."):
             return
             
         self.update_status("Scanning for empty folders...")
@@ -989,6 +999,7 @@ class FileManagementApp:
             self.update_status("Deleting empty folders...")
 
     def delete_empty_folders_logic(self, cancel_event, source_dir):
+        """Worker thread logic to find and delete empty folders from the bottom up."""
         try:
             deleted_folders = 0
             deleted_files = 0
@@ -1054,6 +1065,7 @@ class FileManagementApp:
     # --- ============================= ---
 
     def start_sorter_preview(self):
+        """Start the file sorter preview."""
         # Disable button *before* starting task
         self.sorter_process_button.config(state=tk.DISABLED)
         self.queue.put(("clear_sorter_tree", None))
@@ -1068,6 +1080,7 @@ class FileManagementApp:
             self.update_status(f"Previewing sort: {strategy}...")
             
     def sorter_preview_logic(self, cancel_event, source_dir, strategy):
+        """Worker thread logic for previewing file sorting."""
         try:
             results = []
             # Define output folder names to avoid scanning them
@@ -1130,6 +1143,7 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during preview: {e}"))
 
     def start_sorter_process(self):
+        """Start the file sorting (move/copy) process."""
         if not self.sorter_tree.get_children():
             messagebox.showinfo("Nothing to Process", "No files found in the preview list.")
             return
@@ -1154,6 +1168,7 @@ class FileManagementApp:
             self.sorter_process_button.config(state=tk.DISABLED)
 
     def sorter_process_logic(self, cancel_event, source_dir, plan, is_copy):
+        """Worker thread logic for sorting (move/copy) files."""
         try:
             processed_count = 0
             failed_count = 0
@@ -1203,6 +1218,7 @@ class FileManagementApp:
     # --- ============================= ---
     
     def start_collector_preview(self):
+        """Start the file collector preview."""
         # Disable button *before* starting task
         self.collector_process_button.config(state=tk.DISABLED)
         self.queue.put(("clear_collector_tree", None))
@@ -1230,6 +1246,7 @@ class FileManagementApp:
             self.update_status(f"Searching for files: {', '.join(extensions)}...")
             
     def collector_preview_logic(self, cancel_event, source_dir, extensions):
+        """Worker thread logic for collecting files by extension."""
         try:
             results_batch = []
             count = 0
@@ -1264,6 +1281,7 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during preview: {e}"))
     
     def start_collector_process(self):
+        """Start the file collector (move/copy) process."""
         if not self.collector_tree.get_children():
             messagebox.showinfo("Nothing to Process", "No files found in the preview list.")
             return
@@ -1297,6 +1315,7 @@ class FileManagementApp:
             self.collector_process_button.config(state=tk.DISABLED)
 
     def collector_process_logic(self, cancel_event, source_dir, plan, is_copy):
+        """Worker thread logic for collecting (move/copy) files."""
         try:
             processed_count = 0
             failed_count = 0
@@ -1345,6 +1364,7 @@ class FileManagementApp:
     # --- ============================= ---
 
     def start_find_files(self):
+        """Start the file finder scan based on filters."""
         # Disable buttons *before* starting task
         self.finder_delete_button.config(state=tk.DISABLED)
         self.finder_move_button.config(state=tk.DISABLED)
@@ -1399,6 +1419,7 @@ class FileManagementApp:
             self.update_status(f"Searching for files...")
             
     def find_files_logic(self, cancel_event, source_dir, filters):
+        """Worker thread logic for finding files by metadata filters."""
         try:
             results_batch = []
             count = 0
@@ -1414,26 +1435,28 @@ class FileManagementApp:
                         # --- Apply Filters ---
                         stat = None
                         
+                        # --- CORRECTED FILTER LOGIC ---
                         if 'size' in filters:
                             op, size_bytes = filters['size']
                             stat = os.stat(file_path)
-                            if op == "greater than" and not stat.st_size > size_bytes:
-                                continue
-                            if op == "less than" and not stat.st_size < size_bytes:
-                                continue
+                            if op == "greater than":
+                                if not stat.st_size > size_bytes: continue
+                            elif op == "less than":
+                                if not stat.st_size < size_bytes: continue
                         
                         if 'date' in filters:
                             op, timestamp = filters['date']
                             if not stat: stat = os.stat(file_path)
-                            if op == "before" and not stat.st_mtime < timestamp:
-                                continue
-                            if op == "after" and not stat.st_mtime > timestamp:
-                                continue
+                            if op == "before":
+                                if not stat.st_mtime < timestamp: continue
+                            elif op == "after":
+                                if not stat.st_mtime > timestamp: continue
                         
                         if 'ext' in filters:
                             ext = os.path.splitext(file)[1].lower()
                             if ext not in filters['ext']:
                                 continue
+                        # --- END CORRECTED FILTER LOGIC ---
                         
                         # --- If all filters passed ---
                         if not stat: stat = os.stat(file_path)
@@ -1462,6 +1485,7 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during scan: {e}"))
 
     def start_finder_action(self, action):
+        """Start an action (delete, move, copy) on selected files in the finder."""
         selected_iids = self.finder_tree.selection()
         if not selected_iids:
             messagebox.showinfo("No Files Selected", "Please select one or more files from the list.")
@@ -1497,6 +1521,7 @@ class FileManagementApp:
             self.finder_copy_button.config(state=tk.DISABLED)
 
     def finder_action_logic(self, cancel_event, source_dir, action, plan, target_dir, iids_to_remove):
+        """Worker thread logic for finder actions (delete, move, copy)."""
         try:
             processed_count = 0
             failed_count = 0
@@ -1603,20 +1628,23 @@ class FileManagementApp:
 
             # --- Filter Check Helper ---
             def check_filters(item_size, item_count, is_file=False):
+                # --- CORRECTED FILTER LOGIC ---
                 if 'size' in filters:
                     op, size_bytes = filters['size']
-                    if op == "greater than" and not item_size > size_bytes:
-                        return False
-                    if op == "less than" and not item_size < size_bytes:
-                        return False
+                    if op == "greater than":
+                        if not item_size > size_bytes: return False
+                    elif op == "less than":
+                        if not item_size < size_bytes: return False
                 
                 if not is_file and 'items' in filters:
                     op, count = filters['items']
-                    if op == "greater than" and not item_count > count:
-                        return False
-                    if op == "less than" and not item_count < count:
-                        return False
-                return True
+                    if op == "greater than":
+                        if not item_count > count: return False
+                    elif op == "less than":
+                        if not item_count < count: return False
+                
+                return True # All checks passed
+                # --- END CORRECTED FILTER LOGIC ---
             # ---------------------------
 
             for root, dirs, files in os.walk(source_dir, topdown=False):
@@ -1678,6 +1706,7 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during folder scan: {e}"))
 
     def start_analyzer_delete(self):
+        """Start the delete process for selected items in the analyzer."""
         selected_iids = self.analyzer_tree.selection()
         if not selected_iids:
             messagebox.showinfo("No Items Selected", "Please select one or more files or folders from the list.")
@@ -1704,6 +1733,7 @@ class FileManagementApp:
             self.analyzer_delete_button.config(state=tk.DISABLED)
 
     def analyzer_delete_logic(self, cancel_event, source_dir, plan, iids_to_remove):
+        """Worker thread logic for deleting items from the analyzer list."""
         try:
             processed_count = 0
             failed_count = 0
@@ -1754,10 +1784,12 @@ class FileManagementApp:
     # --- ============================= ---
 
     def dupe_show_context_menu(self, event):
+        """Show context menu for duplicate finder tree."""
         if self.dupe_tree.selection():
             self.dupe_context_menu.post(event.x_root, event.y_root)
 
     def dupe_open_folder(self):
+        """Context menu action to open the selected file's folder."""
         try:
             selected_iid = self.dupe_tree.selection()[0]
             file_path = self.dupe_tree.item(selected_iid, 'values')[1]
@@ -1766,6 +1798,7 @@ class FileManagementApp:
             pass # No item selected or item deleted
 
     def dupe_delete_selected(self):
+        """Context menu action to delete selected files."""
         selected_iids = self.dupe_tree.selection()
         if not selected_iids:
             return
@@ -1822,10 +1855,12 @@ class FileManagementApp:
             self.queue.put(("error", f"An error occurred during delete: {e}"))
 
     def finder_show_context_menu(self, event):
+        """Show context menu for file finder tree."""
         if self.finder_tree.selection():
             self.finder_context_menu.post(event.x_root, event.y_root)
 
     def finder_open_file(self):
+        """Context menu action to open selected file(s)."""
         try:
             for selected_iid in self.finder_tree.selection():
                 values = self.finder_tree.item(selected_iid, 'values')
@@ -1835,6 +1870,7 @@ class FileManagementApp:
             pass # No item selected or item deleted
 
     def finder_open_folder(self):
+        """Context menu action to open the selected file's folder."""
         try:
             # Open the folder for the *first* selected item
             selected_iid = self.finder_tree.selection()[0] 
@@ -1868,6 +1904,7 @@ class FileManagementApp:
     # --- ============================= ---
 
     def hash_file(self, path, block_size=65536):
+        """Return the SHA-256 hash of a file."""
         sha256 = hashlib.sha256()
         with open(path, 'rb') as f:
             for block in iter(lambda: f.read(block_size), b''):
@@ -1875,6 +1912,7 @@ class FileManagementApp:
         return sha256.hexdigest()
 
     def format_size(self, size_bytes):
+        """Convert bytes to a human-readable string (KB, MB, GB)."""
         if size_bytes < 1024:
             return f"{size_bytes} B"
         elif size_bytes < 1024**2:
@@ -1884,17 +1922,17 @@ class FileManagementApp:
         else:
             return f"{size_bytes/1024**3:.2f} GB"
 
-    # ---
-    # --- THIS IS THE CORRECTED FUNCTION ---
-    # ---
     def sort_treeview(self, tree, col, reverse):
-        """Sort a treeview column, with special handling for 'Size'."""
+        """
+        Sort a treeview column when the header is clicked.
+        This now correctly handles file sizes.
+        """
         try:
             data_list = [(tree.set(k, col), k) for k in tree.get_children('')]
         except tk.TclError:
             return # Handle edge case where tree is modified during sort
 
-        # --- NEW, CORRECTED LOGIC ---
+        # --- CORRECTED LOGIC ---
         if col == "Size":
             # Special handling for 'Size' column
             def convert_size_to_bytes(size_str):
@@ -1967,6 +2005,7 @@ class FileManagementApp:
             return False
     
     def get_unique_filename(self, path):
+        """Finds a unique filename by appending (1), (2), etc. if the path exists."""
         if not os.path.exists(path):
             return path
         
@@ -1979,6 +2018,7 @@ class FileManagementApp:
             i += 1
 
     def _open_path(self, path):
+        """Open a file or folder in the default system application."""
         try:
             if platform.system() == "Windows":
                 os.startfile(path)
@@ -1991,6 +2031,7 @@ class FileManagementApp:
             messagebox.showwarning("Open Failed", f"Could not open path: {e}")
 
     def export_csv_report(self, final_dupe_sets, source_dir):
+        """Export the duplicate file list to a CSV file."""
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             filename = f"Duplicate_Report_{timestamp}.csv"
@@ -2016,6 +2057,7 @@ class FileManagementApp:
             self.queue.put(("error", f"Failed to export CSV report: {e}"))
             
     def on_closing(self):
+        """Handle the window close event."""
         if self.current_task:
             if messagebox.askyesno("Task in Progress", "A task is still running. Are you sure you want to quit?"):
                 self.cancel_task()
@@ -2025,8 +2067,6 @@ class FileManagementApp:
 
 # --- Main execution ---
 if __name__ == "__main__":
-    # import shutil # <-- REMOVED FROM HERE
-    # import logging # <-- REMOVED FROM HERE 
     
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
